@@ -1,0 +1,556 @@
+---
+title: "cusecomp"
+output: html_document
+---
+
+
+```{r}
+library(nflfastR)
+library(tidyverse)
+scheme_data <- read_csv("scheme_data.csv")
+pbp_data <- nflfastR::load_pbp(2021)
+
+# Edit team names for later merging
+scheme_data <- scheme_data %>%
+  mutate(posteam = case_when(
+    offense %in% c("ATL", "BUF", "CAR", "CHI", "CIN", "DAL", "DEN", "DET", "GB", "IND", "JAX", "KC", "LA", "LAC", "LV", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WAS") ~ offense,
+    offense == "ARZ" ~ "ARI",
+    offense == "BLT"~ "BAL",
+    offense == "CLV" ~ "CLE",
+    offense == "HST" ~ "HOU",
+    offense == "OAK" ~ "LV",
+    offense == "SD" ~ "LAC",
+    offense == "SL" ~ "LA"
+  ),
+  defteam = case_when(
+    defense %in% c("ATL", "BUF", "CAR", "CHI", "CIN", "DAL", "DEN", "DET", "GB", "IND", "JAX", "KC", "LA", "LAC", "LV", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WAS") ~ defense,
+    defense == "ARZ" ~ "ARI",
+    defense == "BLT"~ "BAL",
+    defense == "CLV" ~ "CLE",
+    defense == "HST" ~ "HOU",
+    defense == "OAK" ~ "LV",
+    defense == "SD" ~ "LAC",
+    defense == "SL" ~ "LA"
+  )) %>%
+  rename(yardline_100 = yards_to_go, ydstogo = distance, qtr = quarter, quarter_seconds_remaining = seconds_left_in_quarter) %>%
+  mutate(game_seconds_remaining = quarter_seconds_remaining+(4-qtr)*900,
+         week = case_when(
+           week < 19 ~ week,
+           week == 28 ~ 19,
+           week == 29 ~ 20,
+           week == 30 ~ 21,
+           week == 32 ~ 22
+         )) %>%
+  filter(down > 0, rps %in% c("R", "P")) %>%
+  group_by(season, week, posteam, defteam, qtr, down, ydstogo, yardline_100) %>%
+  arrange(desc(game_seconds_remaining)) %>%
+  mutate(dupe_number = 1:n()) %>%
+  ungroup()
+
+pbp_data <- pbp_data %>%
+  filter(down > 0) %>%
+  ungroup() %>%
+  select(season, week, posteam, defteam, yardline_100, quarter_seconds_remaining:game_seconds_remaining, qtr:goal_to_go, ydstogo, yards_gained, shotgun:run_gap, ep, epa, wp, wpa, qb_hit:sack, passer, rusher, receiver, pass, rush) %>%
+  group_by(season, week, posteam, defteam, qtr, down, ydstogo, yardline_100) %>%
+  arrange(desc(game_seconds_remaining)) %>%
+  mutate(dupe_number = 1:n()) %>%
+  ungroup()
+
+# Use posteam, defteam, and other play information to merge scheme_data with pbp_data
+merged_data <- left_join(scheme_data, pbp_data, by = c("season", "week", "posteam", "defteam", "qtr", "down", "ydstogo", "yardline_100", "dupe_number")) %>%
+  filter(down > 0, rps %in% c("R", "P"))
+
+
+
+kcepa <- merged_data %>%
+  group_by(offense) %>%
+  subset(offense == "KC")
+
+
+topoffense <- kcepa %>%
+  filter(offense_personnel%in%c("3-0-1-1", "2-1-1-1", "2-0-1-2", "1-0-1-3"))
+
+
+
+merged_data <- merged_data %>%
+  mutate(score_diff = off_score_before - def_score_before)
+
+kcepa %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n(), run_rate = mean(rush)) %>%
+  arrange(desc(mean_epa)) %>%
+  ungroup()
+
+kcepa%>% #important traits of KC offense by personnel
+  filter(rush == 0) %>%
+  #filter(!(pass_direction %in% c("X", NA))) %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n(), target_depth = mean(target_depth), play_action = mean(play_action), time_throw = mean(time_to_throw), time_pressure = mean(time_to_pressure), yac = mean(yards_after_catch, na.rm = TRUE), mean_yards_to_go = mean(yardline_100), mean_down = mean(down)) %>%
+  arrange(desc(mean_epa)) %>%
+  ungroup() 
+
+
+topoffense %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = down, fill = rush)) +
+  geom_bar(position = "fill", color = "black") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  facet_wrap(~offense_personnel) +
+  labs(x = "Down")+
+   scale_fill_manual(values=c("#E31837",
+                             "#FFB81C"))
+
+
+topoffense %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = down, fill = offense_personnel)) +
+  geom_bar(position = "dodge", color = "black") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Down", y = "Count") +
+  facet_wrap(~offense_personnel)+
+scale_fill_manual(values=c("#E31837",
+                             "#FFB81C", "black", "grey"))
+
+
+
+```
+
+
+
+
+```{r}
+topoffense %>%
+  ggplot(aes(x= offense_personnel, fill = rps)) +
+  geom_bar(position = "fill", color = "black")+
+  labs(x = "Offensive Personnel", y="Frequency")+
+  ggtitle("Frequency of Pass/Rush in the Chiefs Top Offensive Formations")+
+   scale_fill_manual(values=c("#E31837",
+                             "#FFB81C"))
+merged_data %>% #epa/play for passing plays by defensive personnel
+  filter(posteam == "KC") %>%
+  group_by(defense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n()) %>%
+  arrange(desc(mean_epa)) %>%
+  filter(count >= 20) %>%
+  ungroup()
+
+
+merged_data %>% #EPA by offensive personnel type, passing 
+  filter(posteam == "KC" & rush == 0) %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n()) %>%
+  arrange(desc(mean_epa)) %>%
+  ungroup() %>%
+  filter(count >=30)
+
+merged_data %>% #epa/play for passing plays by defensive personnel
+  filter(posteam == "KC" & rush == 0) %>%
+  group_by(defense_personnel) %>%
+  summarize(mean_passepa = mean(epa), count = n()) %>%
+  arrange(desc(mean_passepa)) %>%
+  filter(count >= 20) %>%
+  ungroup()
+
+merged_data %>% #EPA by offensive personnel type, passing 
+  filter(posteam == "KC" & rush == 0) %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_passepa = mean(epa), count = n()) %>%
+  arrange(desc(mean_passepa)) %>%
+  ungroup() %>%
+  filter(count >=30)
+
+
+
+merged_data %>% #KC epa/play by number of box players for passing plays
+  filter(posteam == "KC" & rush == 0) %>%
+  group_by(box_players) %>%
+  summarize(mean_passepa = mean(epa), count = n(), target_depth = mean(target_depth), time_to_pass = mean(time_to_throw)) %>%
+  arrange(desc(mean_passepa)) %>%
+  ungroup()
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  summarize(pass_ratio = mean(rush)) #Chiefs run about 30% of the time
+
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  group_by(defense_personnel, offense_personnel) %>%
+  summarize(mean_epa = mean(epa), pass_ratio = 1 - mean(rush), count = n()) %>%
+  arrange(desc(mean_epa)) %>%
+  filter(count >= 20) %>%
+  ungroup()
+
+merged_data %>%
+  filter(posteam == "KC" & rush == 0) %>%
+  group_by(defense_personnel, offense_personnel) %>%
+  summarize(mean_epa = mean(epa), pass_ratio = 1 - mean(rush), count = n(), play_action = mean(play_action)) %>%
+  arrange(desc(mean_epa)) %>%
+  filter(count >= 20) %>%
+  ungroup()
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  group_by(play_action) %>%
+  summarize(mean_epa = mean(epa))
+
+
+kcoffense %>%
+  ggplot(aes(x = target_depth, y = epa, color = offense_personnel)) +
+  geom_point()
+
+
+table1 <- merged_data %>%
+  filter(posteam == "KC") %>%
+  group_by(offense_personnel, defense_personnel) %>%
+  summarize(mean_epa = mean(epa), pass_ratio = 1 - mean(rush), count = n(), play_action = mean(play_action), blitz_ratio = mean(blitz), box = mean(box_players), down_m = mean(down), time_to_pres = mean(time_to_pressure)) %>%
+  arrange(desc(play_action)) %>%
+  filter(count >= 20) %>%
+  ungroup()
+write_csv(table1, file = "table1.csv")
+```
+
+
+
+```{r}
+
+topoffense %>%
+  filter(pass_direction != "NA")%>%
+  filter(pass_direction != "X")%>%
+  ggplot(aes(x= offense_personnel, fill = pass_direction)) +
+  geom_bar(position = "fill", color="Black")+
+  labs(x = "Offensive Personnel", y="Frequency")+
+  ggtitle("Frequency of Pass Direction in the Chiefs Top Offensive Formations ")+
+   scale_fill_manual(values=c("#E31837","white",
+                             "#FFB81C"))
+target_offense <- c("2-0-1-2", "2-1-1-1", "3-0-1-1")
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  filter(offense_personnel == target_offense) %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = offense_personnel, fill = rush)) +
+  geom_bar(position = "dodge", color = "Black") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Offensive Personnel", y = "Count")+
+   scale_fill_manual(values=c("#E31837","#FFB81C"))+
+  ggtitle("Number of Passing/Rushing plays per Chiefs Offensive Personnel")
+
+
+target_defense = c("1/4/06", "2/3/06", "2/4/05", "3/2/06", "3/3/05", "3/4/04", "4/1/06", "4/2/05", "4/3/04")
+merged_data %>% ## need to fix
+  filter(posteam == "KC") %>%
+  filter(defense_personnel == target_defense) %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = defense_personnel, fill = rush)) +
+  geom_bar(position = "dodge", color = "black") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Defensive Personnel", y = "Count")+
+   scale_fill_manual(values=c("#E31837","#FFB81C"))+
+  ggtitle("Number of Passing/Rushing plays per Chiefs Opponent's Defensive Personnel")
+
+
+merged_data %>% ## need to fix
+  filter(posteam == "KC") %>%
+  filter(offense_personnel == target_offense) %>%
+  mutate(play_a = factor(play_action)) %>%
+  ggplot(aes(x = offense_personnel, fill = play_a)) +
+  geom_bar(position = position_fill(), color = "black") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Offensive Personnel", y = "Proportion")+
+   scale_fill_manual(values=c("#E31837","#FFB81C"))+
+  ggtitle("Proportion of Play Action Plays in Chiefs Top Offensive Personnel")
+
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  filter(offense_personnel%in%c("2-0-1-2", "2-1-1-1", "3-0-1-1"))%>%
+  ggplot(aes(x = epa)) +
+  geom_histogram() +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "blue", size=1.5)+
+  facet_grid(~offense_personnel) +
+  labs(x = "epa/play", y = "offensive scheme")+
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) 
+
+
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  group_by(blitz, offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count=n())%>%
+  filter(count > 30)
+
+
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  group_by(blitz, defense_personnel) %>%
+  summarize(mean_epa = mean(epa), count=n())%>%
+  filter(count > 30)
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  group_by(blitz) %>%
+  summarize(mean_epa = mean(epa), count=n())%>%
+  filter(count > 30)
+
+
+```
+
+
+```{r}
+
+topoffense %>%
+  ggplot(aes(x= offense_personnel, fill = mofo_coverage_played)) +
+  geom_bar(position = "fill", color = "black")+  
+  labs(x = "Offensive Personnel", y="Frequency")+
+   ggtitle("Frequency of Middle of Field Coverage in \nthe Chiefs Top Offensive Formations ")+
+   scale_fill_manual(values=c("#E31837",
+                             "#FFB81C"))
+
+
+topoffense %>%
+  ggplot(aes(x= offense_personnel, fill = mofo_coverage_shown)) +
+  geom_bar(position = "fill", color = "black")+
+  labs(x = "Offensive Personnel", y="Frequency")+
+   ggtitle("Frequency of Middle of Field Coverage Shown in \nthe Chiefs Top Offensive Formations ")+
+   scale_fill_manual(values=c("#E31837",
+                             "#FFB81C"))
+
+
+topoffense%>%
+  group_by(mofo_coverage_shown, mofo_coverage_played)%>%
+  summarize(meanepa = mean(epa))
+
+
+
+
+\
+```
+```{r}
+otheroffense <- merged_data %>%
+  group_by(offense) %>%
+  subset(offense != "KC")%>%
+  filter(offense_personnel%in%c("3-0-1-1", "2-1-1-1", "2-0-1-2", "1-0-1-3"))
+
+otheroffense %>%
+group_by(offense_personnel, down)%>%
+summarize(mean_epa = mean(epa), count=n())
+
+topoffense %>%
+  group_by(offense_personnel)%>%
+summarize(mean_epa = mean(epa), count=n())
+  
+```
+```{r}
+  kcepa %>%
+  ungroup() %>%
+    group_by(defense_personnel)%>%
+    summarize(mean_epa = mean(epa), count = n())%>%
+    filter(count >30)
+
+
+ kcepa %>%
+  ungroup() %>%
+    group_by(coverage_scheme)%>%
+    summarize(mean_epa = mean(epa), count = n())%>%
+    filter(count >30)
+  
+  
+ kcepa %>%
+    group_by(coverage_scheme)%>%
+    count()
+  
+  kcepa %>%
+    group_by(num_pass_rush_players)%>%
+    summarize(mean = mean(epa), count = n())
+  
+  kcepa %>%
+    group_by(box_players)%>%
+    summarize(mean = mean(epa), count = n())
+  
+  kcepa%>%
+  ggplot (aes(x=num_pass_rush_players, y=epa)) +
+    geom_violin()
+  
+```
+```{r}
+defense <- kcepa %>%
+  filter(defense_personnel%in%c("2/4/05", "2/3/06", "3/3/05", "4/1/06", "4/2/05"))
+
+defense%>%
+  group_by(defense_personnel)%>%
+  summarize(mean = mean(epa), count=n())
+
+
+defense%>%
+  ggplot(aes(x=defense_personnel, fill=rps))+
+  geom_bar(position="dodge")
+
+defense%>%
+   filter(offense_personnel%in%c("3-0-1-1", "2-1-1-1", "2-0-1-2", "1-0-1-3"))%>%
+  ggplot(aes(x=defense_personnel, fill=offense_personnel))+
+  geom_bar(position="fill")
+
+defense%>%
+  mutate(blitz=factor(blitz))%>%
+  ggplot(aes(x=defense_personnel, fill=blitz))+
+  geom_bar(position="fill")
+
+defense%>%
+  mutate(down=factor(down))%>%
+  ggplot(aes(x=defense_personnel, fill=down))+
+  geom_bar(position="dodge")
+
+
+
+defense%>%
+  group_by(defense_personnel)%>%
+  filter(defense_personnel%in%c("2/4/05", "2/3/06", "3/3/05", "4/1/06", "4/2/05"))%>%
+  summarize(mean_epa = mean(epa), count=n(), mean_box = mean(box_players), mean_yards = mean(ydstogo), mean_time = mean(time_to_throw))
+
+
+```
+
+```{r}
+opponents <- merged_data%>%
+  filter(defense%in%c("MIA", "NE", "NYJ", "CHI", "IND", "HOU", "JAX", "DET", "ATL", "CAR", "NO", "TB", "LA", "SEA", "MIN", "SF", "ARI"))
+
+opponents %>%
+   filter(offense_personnel%in%c("3-0-1-1"))%>%
+  group_by(defense)%>%
+  summarize(meanepa = mean(epa), count=n())%>%
+  
+```
+```{r}
+neworleans <- opponents%>%
+  filter(defense%in%c("NO"))
+
+
+neworleans%>%
+  group_by(offense_personnel)%>%
+  summarize(meanepa = mean(epa), count=n())%>%
+  filter(count>30)
+
+
+neworleans%>%
+   mutate(down=factor(down))%>%
+  filter(defense_personnel%in%c("3/2/06","4/2/05"))%>%
+  ggplot(aes(x=defense_personnel, fill = down))+
+  geom_bar()
+
+
+
+
+larams <- opponents%>%
+  filter(defense%in%c("LA"))
+
+larams%>%
+  group_by(offense_personnel)%>%
+  summarize(meanepa = mean(epa), count=n())%>%
+  filter(count > 30)
+
+
+larams%>%
+   mutate(down=factor(down))%>%
+  filter(defense_personnel%in%c("2/3/06","2/4/05", "3/3/05", "3/4/04"))%>%
+  filter(offense_personnel%in%c("3-0-1-1"))%>%
+  group_by(defense_personnel)%>%
+  summarize(meanepa = mean(epa), count=n())
+```
+```{r}
+merged_data %>%
+  filter(posteam == "KC") %>%
+  filter(offense_personnel == target_offense) %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = offense_personnel, fill = rush)) +
+  geom_bar(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Offensive Personnel", y = "Proportion")
+
+merged_data %>% ## need to fix
+  filter(posteam == "KC") %>%
+  filter(offense_personnel == target_offense) %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = offense_personnel, fill = rush)) +
+  geom_bar(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Offensive Personnel", y = "Proportion")
+
+merged_data %>% ## need to fix
+  filter(posteam == "KC") %>%
+  filter(defense_personnel == target_defense) %>%
+  mutate(rush = factor(rush)) %>%
+  ggplot(aes(x = offense_personnel, fill = rush)) +
+  geom_bar(position = position_fill()) +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Defensive Personnel", y = "Proportion")
+
+merged_data %>% ## need to fix
+  filter(posteam == "KC") %>%
+  filter(offense_personnel == target_offense) %>%
+  mutate(play_a = factor(play_action)) %>%
+  ggplot(aes(x = offense_personnel, fill = play_a)) +
+  geom_bar(position = position_fill()) +
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) +
+  labs(x = "Defensive Personnel", y = "Proportion")
+
+merged_data %>%
+  filter(posteam == "KC") %>%
+  ggplot(aes(x = epa)) +
+  geom_histogram() +
+  facet_grid(~offense_personnel) +
+  labs(x = "epa/play", y = "offensive scheme")
+  theme(axis.text.x = element_text(angle = 60, hjust=1)) 
+  
+merged_data %>%
+  filter(posteam == "KC") %>%
+  ggplot(aes(x = epa)) +
+  geom_histogram() +
+  facet_wrap(~defense_personnel) +
+  labs(x = "epa/play", y = "offensive scheme")
+  theme(axis.text.x = element_text(angle = 60, hjust=1))
+```
+```{r}
+kcepa <- kcepa %>%
+  mutate(score_diff = off_score_before - def_score_before)
+
+kcepa %>%
+  filter(yardline_100 <= 90 & yardline_100 >= 60) %>%
+  filter(offense_personnel == "3-0-1-1") %>%
+  filter(down == 1 & abs(score_diff) < 8) %>%
+  filter(screen == 0) %>%
+  summarize(down_yards = mean(ydstogo), mean_rush = mean(rush), mean_epa = mean(epa), count = n(), target_depth = mean(target_depth), play_action = mean(play_action), time_throw = mean(time_to_throw), time_pressure = mean(time_to_pressure), yac = mean(yards_after_catch, na.rm = TRUE), mean_yards_to_go = mean(yardline_100), mean_down = mean(down), m_screen = mean(screen), ypp = mean(yards_gained)) %>%
+  arrange(desc(mean_epa)) %>%
+  ungroup()
+
+
+kcepa %>% #important traits of KC offense by personnel
+  filter(rush == 0) %>%
+  #filter(!(pass_direction %in% c("X", NA))) %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n(), target_depth = mean(target_depth), play_action = mean(play_action), time_throw = mean(time_to_throw), time_pressure = mean(time_to_pressure), yac = mean(yards_after_catch, na.rm = TRUE), mean_yards_to_go = mean(yardline_100), mean_down = mean(down)) %>%
+  arrange(desc(mean_epa)) %>%
+  filter(count > 25)%>%
+  ungroup()
+
+```
+
+
+```{r}
+kcoffense %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n(), run_rate = mean(rush)) %>%
+  arrange(desc(mean_epa)) %>%
+  ungroup()
+
+kcoffense %>% #important traits of KC offense by personnel
+  filter(rush == 0) %>%
+  #filter(!(pass_direction %in% c("X", NA))) %>%
+  group_by(offense_personnel) %>%
+  summarize(mean_epa = mean(epa), count = n(), target_depth = mean(target_depth), play_action = mean(play_action), time_throw = mean(time_to_throw), time_pressure = mean(time_to_pressure), yac = mean(yards_after_catch, na.rm = TRUE), mean_yards_to_go = mean(yardline_100), mean_down = mean(down)) %>%
+  arrange(desc(mean_epa)) %>%
+  ungroup()
+
+
